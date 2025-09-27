@@ -155,6 +155,22 @@ local function createESP(player)
 	local s5 = Instance.new("UIStroke", mt)
 	s5.Thickness = 0.8
 	s5.Color = Color3.new(0,0,0)
+
+-- Box
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.new(0, 42, 0, 42)
+	bb.Parent = player.Character.HumanoidRootPart
+	bb.Brightness = math.huge
+	bb.AlwaysOnTop = true
+	bb.ResetOnSpawn = false
+	bb.Name = "Box"
+
+	local bicon = Instance.new("ImageLabel")
+	bicon.Parent = bb
+	bicon.Name = "Icon"
+	bicon.Image = "rbxthumb://type=Asset&id=81228165635365&w=420&h=420"
+	bicon.Size = UDim2.new(1, 0, 1, 0)
+	bicon.BackgroundTransparency = 1
 	
 	-- Beam (connect RootParts)
 	if not player.Character:FindFirstChild("HeadLine") then
@@ -204,7 +220,16 @@ RunService.RenderStepped:Connect(function()
 					if ITag then
 						local distance = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
 							and math.floor((player.Character.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude) or 0
-						ITag.Text = "[Total Distance: "..distance.." s/s]"
+						local toolName = "None"
+if player.Character then
+    for _,tool in ipairs(player.Character:GetChildren()) do
+        if tool:IsA("Tool") then
+            toolName = tool.Name
+            break
+        end
+    end
+end
+ITag.Text = "[Distance: "..distance.." s/s , "..toolName.."]"
 					end
 				end
 				
