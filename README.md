@@ -285,3 +285,277 @@ toggleButton.MouseButton1Click:Connect(function()
 		toggleButton.TextColor3 = Color3.fromRGB(255,0,0)
 	end
 end)
+
+---- Aim-Bot
+
+-- LocalScript (StarterPlayerScripts)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = workspace.CurrentCamera
+
+-- Config (default)
+local SWITCH_TIME = 2 -- seconds per target
+local MAX_DISTANCE = 100 -- default distance (studs)
+local AIM_ENABLED = false
+local lastTarget
+
+-- Utility: safely parse number
+local function toPositiveNumber(s, default)
+    local n = tonumber(s)
+    if not n or n <= 0 then return default end
+    return n
+end
+
+-- === GUI ===
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AimBotUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
+screenGui.ScreenInsets = Enum.ScreenInsets.None
+screenGui.Parent = game.CoreGui
+
+
+-- Frame (draggable)
+local frame = Instance.new("Frame")
+frame.Name = "AimbotFrame"
+frame.Size = UDim2.new(0.15, 0, 0.34, 0) -- container size
+frame.Position = UDim2.new(0.5, 0, 0.05, 0) -- user requested
+frame.AnchorPoint = Vector2.new(0.5, 0)     -- anchor (0.5, 0)
+frame.BackgroundTransparency = 0.35
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+frame.Parent = screenGui
+
+-- Enable dragging via UIDragDetector
+local dragDetector = Instance.new("UIDragDetector")
+dragDetector.Parent = frame
+
+-- Distance TextBox
+local distanceBox = Instance.new("TextBox")
+distanceBox.Name = "DistanceBox"
+distanceBox.Size = UDim2.new(0.68,0, 0.68, 0) -- user requested
+distanceBox.Position = UDim2.new(0.5, 0, 0.05, 0)
+distanceBox.AnchorPoint = Vector2.new(0.5, 0)
+distanceBox.Text = tostring(MAX_DISTANCE)
+distanceBox.PlaceholderText = "Max distance (studs)"
+distanceBox.ClearTextOnFocus = false
+distanceBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+distanceBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+distanceBox.Font = Enum.Font.SourceSans
+distanceBox.TextScaled = true
+distanceBox.Parent = frame
+
+local distance_aspect = Instance.new("UIAspectRatioConstraint")
+distance_aspect.Parent = distanceBox
+distance_aspect.AspectRatio = 1.7
+
+-- Toggle Button (under textbox)
+local toggleButton = Instance.new("TextButton")
+toggleButton.Name = "ToggleAimbot"
+toggleButton.Size = UDim2.new(0.68, 0, 0.68, 0) -- user requested
+toggleButton.Position = UDim2.new(0.5, 0, 0.9, 0) -- user requested
+toggleButton.AnchorPoint = Vector2.new(0.5, 0.9)  -- user requested
+toggleButton.Text = "Toggle AimBot: OFF"
+toggleButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.Font = Enum.Font.SourceSansBold
+toggleButton.TextScaled = true
+toggleButton.Parent = frame
+
+local toggle_aspect = Instance.new("UIAspectRatioConstraint")
+toggle_aspect.Parent = toggleButton
+toggle_aspect.AspectRatio = 1.7
+
+-- Circle ImageLabel (visible only when AIM_ENABLED)
+local circle = Instance.new("ImageLabel")
+circle.Name = "Circle"
+circle.Size = UDim2.new(0.5, 0, 0.5, 0) -- requested
+circle.Position = UDim2.new(0.5, 0, 0.5, 0)
+circle.AnchorPoint = Vector2.new(0.5, 0.5)
+circle.BackgroundTransparency = 1
+circle.Image = "rbxthumb://type=Asset&id=8789695013&w=420&h=420" -- leave blank or put your circle asset id here (e.g. "rbxassetid://12345")
+-- initial color while OFF: red when aimbot on but not locked; we'll set when toggled
+circle.Visible = false -- only visible when aim toggled on
+circle.Parent = screenGui
+
+local circle_aspect = Instance.new("UIAspectRatioConstraint")
+circle_aspect.Parent = circle
+circle_aspect.AspectRatio = 1
+
+-- Helper to update UI colors/visibility
+local function setAimbotUIEnabled(enabled)
+    AIM_ENABLED = enabled
+    if enabled then
+        toggleButton.Text = "Toggle AimBot: ON"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+        circle.Visible = true
+        -- when enabled and not locked, circle should be red per your request
+        circle.ImageColor3 = Color3.fromRGB(255, 0, 0)
+    else
+        toggleButton.Text = "Toggle AimBot: OFF"
+        toggleButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
+        circle.Visible = false
+        -- reset color (keeps tidy)
+        circle.ImageColor3 = Color3.fromRGB(255, 255, 255)
+    end
+end
+
+-- Toggle button click
+toggleButton.MouseButton1Click:Connect(function()
+    -- update MAX_DISTANCE from textbox first
+    MAX_DISTANCE = toPositiveNumber(distanceBox.Text, MAX_DISTANCE)
+    setAimbotUIEnabled(not AIM_ENABLED)
+end)
+
+-- When textbox loses focus, update distance
+distanceBox.FocusLost:Connect(function(enterPressed)
+    MAX_DISTANCE = toPositiveNumber(distanceBox.Text, MAX_DISTANCE)
+    distanceBox.Text = tostring(MAX_DISTANCE)
+end)
+
+-- === Targeting logic ===
+
+-- Check whether any other player has a Team assigned
+local function teamsExist()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Team ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+-- Gather valid targets according to user's constraints
+local function getTargets()
+    local targets = {}
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return targets
+    end
+    local myPos = LocalPlayer.Character.HumanoidRootPart.Position
+    local teamMode = teamsExist()
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
+            local head = plr.Character:FindFirstChild("Head")
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            if humanoid and humanoid.Health > 0 and head and hrp then
+                local distance = (hrp.Position - myPos).Magnitude
+                if distance <= MAX_DISTANCE then
+                    -- team filtering
+                    if teamMode then
+                        if plr.Team ~= LocalPlayer.Team then
+                            table.insert(targets, {player = plr, distance = distance})
+                        end
+                    else
+                        table.insert(targets, {player = plr, distance = distance})
+                    end
+                end
+            end
+        end
+    end
+
+    return targets
+end
+
+-- Pick a random target not equal to lastTarget (if possible)
+local function pickRandomTarget()
+    local others = getTargets()
+    if #others == 0 then return nil end
+
+    local pool = {}
+    for _, t in ipairs(others) do
+        table.insert(pool, t.player)
+    end
+
+    if #pool == 0 then return nil end
+
+    local choice
+    repeat
+        choice = pool[math.random(1, #pool)]
+    until choice ~= lastTarget or #pool == 1
+
+    lastTarget = choice
+    return choice
+end
+
+-- Set circle color: GREEN when locked, RED when unlocked (but only visible while AIM_ENABLED)
+local function setCircleLocked(locked)
+    if not AIM_ENABLED then
+        circle.Visible = false
+        return
+    end
+    circle.Visible = true
+    if locked then
+        circle.ImageColor3 = Color3.fromRGB(0, 255, 0) -- green when locked
+    else
+        circle.ImageColor3 = Color3.fromRGB(255, 0, 0) -- red when not locked
+    end
+end
+
+-- Main loop: perform local camera aim lock
+task.spawn(function()
+    while true do
+        if AIM_ENABLED then
+            -- Always keep MAX_DISTANCE updated from the box (in case user typed but didn't unfocus)
+            MAX_DISTANCE = toPositiveNumber(distanceBox.Text, MAX_DISTANCE)
+
+            local target = pickRandomTarget()
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                local head = target.Character.Head
+                local startTime = tick()
+                local locked = false
+
+                while tick() - startTime < SWITCH_TIME and AIM_ENABLED and target.Character and target.Character:FindFirstChild("Head") do
+                    -- recheck alive + hrp + distance + team (in case of changes)
+                    local humanoid = target.Character:FindFirstChildOfClass("Humanoid")
+                    local hrp = target.Character:FindFirstChild("HumanoidRootPart")
+                    if not (humanoid and humanoid.Health > 0 and hrp and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")) then
+                        break
+                    end
+
+                    local myPos = LocalPlayer.Character.HumanoidRootPart.Position
+                    local distance = (hrp.Position - myPos).Magnitude
+                    if distance <= MAX_DISTANCE then
+                        -- team re-check
+                        if teamsExist() and target.Team == LocalPlayer.Team then
+                            break
+                        end
+
+                        -- lock camera locally
+                        Camera.CFrame = CFrame.new(Camera.CFrame.Position, head.Position)
+                        if not locked then
+                            locked = true
+                            setCircleLocked(true) -- green when locked
+                        end
+                    else
+                        break
+                    end
+
+                    RunService.RenderStepped:Wait()
+                end
+
+                -- unlocked (either time expired or lost)
+                setCircleLocked(false) -- red when unlocked
+            else
+                -- no valid target: show unlocked red circle while enabled
+                setCircleLocked(false)
+                RunService.RenderStepped:Wait()
+            end
+        else
+            RunService.RenderStepped:Wait()
+        end
+    end
+end)
+
+-- Initialize UI state
+distanceBox.Text = tostring(MAX_DISTANCE)
+setAimbotUIEnabled(false)
+
+-- Optional: clicking the circle will turn the aimbot off
+circle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        setAimbotUIEnabled(false)
+    end
+end) 
