@@ -300,6 +300,8 @@ local SWITCH_TIME = 2 -- seconds per target
 local MAX_DISTANCE = 100 -- default distance (studs)
 local AIM_ENABLED = false
 local lastTarget
+local RaycastParams = RaycastParams.new()
+RaycastParams.FilterType = Enum.RaycastFilterType.Blacklist
 
 -- Utility: safely parse number
 local function toPositiveNumber(s, default)
@@ -383,6 +385,26 @@ local circle_aspect = Instance.new("UIAspectRatioConstraint")
 circle_aspect.Parent = circle
 circle_aspect.AspectRatio = 1
 
+local function isVisible(targetHead)
+    if not (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")) then
+        return false
+    end
+
+    -- Ignore local character
+    RaycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+
+    local origin = Camera.CFrame.Position
+    local direction = (targetHead.Position - origin)
+    local result = workspace:Raycast(origin, direction, RaycastParams)
+
+    if result then
+        -- Hit something, only valid if we hit the same head
+        return result.Instance:IsDescendantOf(targetHead.Parent)
+    end
+    -- No hit = clear view
+    return true
+end
+
 -- Helper to update UI colors/visibility
 local function setAimbotUIEnabled(enabled)
     AIM_ENABLED = enabled
@@ -442,7 +464,7 @@ local function getTargets()
             local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
             if humanoid and humanoid.Health > 0 and head and hrp then
                 local distance = (hrp.Position - myPos).Magnitude
-                if distance <= MAX_DISTANCE then
+                if distance <= MAX_DISTANCE and isVisible(head) then
                     -- team filtering
                     if teamMode then
                         if plr.Team ~= LocalPlayer.Team then
@@ -517,7 +539,7 @@ task.spawn(function()
 
                     local myPos = LocalPlayer.Character.HumanoidRootPart.Position
                     local distance = (hrp.Position - myPos).Magnitude
-                    if distance <= MAX_DISTANCE then
+                    if distance <= MAX_DISTANCE and isVisible(head) then
                         -- team re-check
                         if teamsExist() and target.Team == LocalPlayer.Team then
                             break
