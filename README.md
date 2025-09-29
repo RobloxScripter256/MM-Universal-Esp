@@ -1,15 +1,26 @@
+
+-- LocalScript (StarterPlayerScripts)
+-- ESP + Admin-style GUI Lines
+-- Lines from top screen center to all OTHER player Heads
+-- Name color = TeamColor (neutral = white)
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
 
---// Create ScreenGui once
+-- CONFIG
+local LINE_THICKNESS = 1
+local OFFSET_Y = 40 -- pixels down from top center
+
+--// Create ScreenGui once for toggle
 local screenGui = LocalPlayer:FindFirstChild("PlayerGui"):FindFirstChild("ESP_GUI")
 if not screenGui then
     screenGui = Instance.new("ScreenGui")
     screenGui.Name = "ESP_GUI"
     screenGui.ResetOnSpawn = false
-    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    screenGui.Parent = game.CoreGui
 end
 
 -- Main Frame
@@ -40,6 +51,82 @@ toggleButton.TextColor3 = Color3.fromRGB(255, 0, 0)
 toggleButton.Parent = frame
 
 local toggle = false
+
+---------------------------------------------------------------------------------------------------
+-- GUI for lines (CoreGui, admin ESP lines style)
+local lineGui = Instance.new("ScreenGui")
+lineGui.Name = "AdminHeadLines"
+lineGui.IgnoreGuiInset = true
+lineGui.DisplayOrder = 1000
+lineGui.ResetOnSpawn = false
+lineGui.Parent = game.CoreGui
+
+local tracked = {} -- [player] = {line = Frame, head = BasePart?}
+
+local function makeLine()
+	local f = Instance.new("Frame")
+	f.Size = UDim2.fromOffset(10, LINE_THICKNESS)
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.BorderSizePixel = 0
+	f.Visible = false
+	f.Parent = lineGui
+	return f
+end
+
+local function getColor(player)
+	if player.Team and player.Team.TeamColor then
+		return player.Team.TeamColor.Color
+	else
+		return Color3.new(1,1,1)
+	end
+end
+
+local function updateHead(player, character)
+	if tracked[player] then
+		tracked[player].head = character:WaitForChild("Head", 5)
+	end
+end
+
+local function trackPlayer(player)
+	if player == LocalPlayer then return end
+	if not tracked[player] then
+		local line = makeLine()
+		tracked[player] = {line = line, head = nil}
+		line.BackgroundColor3 = getColor(player)
+
+		player:GetPropertyChangedSignal("Team"):Connect(function()
+			line.BackgroundColor3 = getColor(player)
+		end)
+
+		player.CharacterAdded:Connect(function(char)
+			updateHead(player, char)
+		end)
+		player.CharacterRemoving:Connect(function()
+			if tracked[player] then
+				tracked[player].head = nil
+			end
+		end)
+	end
+	if player.Character then
+		updateHead(player, player.Character)
+	end
+end
+
+local function untrackPlayer(player)
+	if tracked[player] then
+		if tracked[player].line then
+			tracked[player].line:Destroy()
+		end
+		tracked[player] = nil
+	end
+end
+
+for _,p in ipairs(Players:GetPlayers()) do
+	trackPlayer(p)
+end
+Players.PlayerAdded:Connect(trackPlayer)
+Players.PlayerRemoving:Connect(untrackPlayer)
+---------------------------------------------------------------------------------------------------
 
 --// Function to create the ESP for a character
 local function createESP(player)
@@ -75,7 +162,7 @@ local function createESP(player)
 	nameTag.TextScaled = true
 	nameTag.Position = UDim2.new(0.5, 0, 0.5, 0)
 	nameTag.BackgroundTransparency = 1
-	nameTag.TextColor3 = Color3.fromRGB(255,255,255)
+	nameTag.TextColor3 = getColor(player)
 	local s1 = Instance.new("UIStroke", nameTag)
 	s1.Thickness = 0.8
 	s1.Color = Color3.new(0,0,0)
@@ -156,7 +243,7 @@ local function createESP(player)
 	s5.Thickness = 0.8
 	s5.Color = Color3.new(0,0,0)
 
--- Box
+	-- Box
 	local bb = Instance.new("BillboardGui")
 	bb.Size = UDim2.new(0, 42, 0, 42)
 	bb.Parent = player.Character.HumanoidRootPart
@@ -171,36 +258,47 @@ local function createESP(player)
 	bicon.Image = "rbxthumb://type=Asset&id=81228165635365&w=420&h=420"
 	bicon.Size = UDim2.new(1, 0, 1, 0)
 	bicon.BackgroundTransparency = 1
-	
-	-- Beam (connect RootParts)
-	if not player.Character:FindFirstChild("HeadLine") then
-		local att1 = Instance.new("Attachment", player.Character.HumanoidRootPart)
-		local att2 = Instance.new("Attachment", LocalPlayer.Character and LocalPlayer.Character:WaitForChild("HumanoidRootPart"))
-		local beam = Instance.new("Beam")
-		beam.Name = "HeadLine"
-		beam.Attachment0 = att1
-		beam.Attachment1 = att2
-		beam.Width0 = 0.1
-		beam.Width1 = 0.1
-		beam.Color = ColorSequence.new(Color3.fromRGB(0, 255, 0))
-		beam.Parent = player.Character
-	end
 end
 
 --// Loop update info
 RunService.RenderStepped:Connect(function()
+	-- update GUI lines
+	local vpSize = Camera.ViewportSize
+	local srcX = vpSize.X/2
+	local srcY = OFFSET_Y
+
+	for player,data in pairs(tracked) do
+		local line = data.line
+		local head = data.head
+		if toggle and head and head.Parent then
+			local pos, visible = Camera:WorldToViewportPoint(head.Position)
+			if visible and pos.Z > 0 then
+				local dx,dy = pos.X-srcX, pos.Y-srcY
+				local dist = math.sqrt(dx*dx+dy*dy)
+				local midX, midY = (pos.X+srcX)/2, (pos.Y+srcY)/2
+
+				line.Visible = true
+				line.Size = UDim2.fromOffset(dist, LINE_THICKNESS)
+				line.Position = UDim2.fromOffset(midX, midY)
+				line.Rotation = math.deg(math.atan2(dy,dx))
+			else
+				line.Visible = false
+			end
+		else
+			line.Visible = false
+		end
+	end
+
+	-- update ESP billboards
 	for _,player in pairs(Players:GetPlayers()) do
 		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
 			createESP(player)
 			
 			local esp = player.Character.HumanoidRootPart:FindFirstChild("MainEsp")
 			local side = player.Character.HumanoidRootPart:FindFirstChild("Side")
-			local line = player.Character:FindFirstChild("HeadLine")
 			
-			-- Toggle handling
 			if esp then esp.Enabled = toggle end
 			if side then side.Enabled = toggle end
-			if line then line.Enabled = toggle end
 			
 			if toggle and esp then
 				local mainFrame = esp:FindFirstChild("MainFrame")
@@ -211,6 +309,7 @@ RunService.RenderStepped:Connect(function()
 					
 					if nameTag then
 						nameTag.Text = string.format("%s (@%s)", player.DisplayName, player.Name)
+						nameTag.TextColor3 = getColor(player)
 					end
 					
 					if fTag then
@@ -221,15 +320,15 @@ RunService.RenderStepped:Connect(function()
 						local distance = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
 							and math.floor((player.Character.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude) or 0
 						local toolName = "None"
-if player.Character then
-    for _,tool in ipairs(player.Character:GetChildren()) do
-        if tool:IsA("Tool") then
-            toolName = tool.Name
-            break
-        end
-    end
-end
-ITag.Text = "[Distance: "..distance.." s/s , "..toolName.."]"
+						if player.Character then
+							for _,tool in ipairs(player.Character:GetChildren()) do
+								if tool:IsA("Tool") then
+									toolName = tool.Name
+									break
+								end
+							end
+						end
+						ITag.Text = "[Distance: "..distance.." s/s , "..toolName.."]"
 					end
 				end
 				
@@ -256,7 +355,7 @@ ITag.Text = "[Distance: "..distance.." s/s , "..toolName.."]"
 								end
 								mt.Text = "["..table.concat(str, " , ").."]"
 							else
-								mt.Text = "[Nil]"
+								mt.Text = "[No LeaderStats Found]"
 							end
 						end
 					end
@@ -278,10 +377,10 @@ end)
 toggleButton.MouseButton1Click:Connect(function()
 	toggle = not toggle
 	if toggle then
-		toggleButton.Text = "ON"
+		toggleButton.Text = "Esp Lines:ON"
 		toggleButton.TextColor3 = Color3.fromRGB(0,255,0)
 	else
-		toggleButton.Text = "OFF"
+		toggleButton.Text = "Esp Lines:OFF"
 		toggleButton.TextColor3 = Color3.fromRGB(255,0,0)
 	end
 end)
@@ -340,7 +439,7 @@ distanceBox.Size = UDim2.new(0.68,0, 0.68, 0) -- user requested
 distanceBox.Position = UDim2.new(0.5, 0, 0.05, 0)
 distanceBox.AnchorPoint = Vector2.new(0.5, 0)
 distanceBox.Text = tostring(MAX_DISTANCE)
-distanceBox.PlaceholderText = "Max distance (studs)"
+distanceBox.PlaceholderText = "Aim-Bot Range"
 distanceBox.ClearTextOnFocus = false
 distanceBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 distanceBox.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -358,7 +457,7 @@ toggleButton.Name = "ToggleAimbot"
 toggleButton.Size = UDim2.new(0.68, 0, 0.68, 0) -- user requested
 toggleButton.Position = UDim2.new(0.5, 0, 0.9, 0) -- user requested
 toggleButton.AnchorPoint = Vector2.new(0.5, 0.9)  -- user requested
-toggleButton.Text = "Toggle AimBot: OFF"
+toggleButton.Text = "AimBot: OFF"
 toggleButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
 toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 toggleButton.Font = Enum.Font.SourceSansBold
@@ -409,13 +508,13 @@ end
 local function setAimbotUIEnabled(enabled)
     AIM_ENABLED = enabled
     if enabled then
-        toggleButton.Text = "Toggle AimBot: ON"
+        toggleButton.Text = "AimBot: ON"
         toggleButton.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
         circle.Visible = true
         -- when enabled and not locked, circle should be red per your request
         circle.ImageColor3 = Color3.fromRGB(255, 0, 0)
     else
-        toggleButton.Text = "Toggle AimBot: OFF"
+        toggleButton.Text = "AimBot: OFF"
         toggleButton.BackgroundColor3 = Color3.fromRGB(170, 0, 0)
         circle.Visible = false
         -- reset color (keeps tidy)
@@ -581,3 +680,4 @@ circle.InputBegan:Connect(function(input)
         setAimbotUIEnabled(false)
     end
 end) 
+
