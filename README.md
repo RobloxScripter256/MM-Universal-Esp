@@ -397,7 +397,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Camera = workspace.CurrentCamera
 
 -- Config (default)
-local SWITCH_TIME = 2 -- seconds per target
+local SWITCH_TIME = 10 -- seconds per target
 local MAX_DISTANCE = 100 -- default distance (studs)
 local AIM_ENABLED = false
 local lastTarget
